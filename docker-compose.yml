@@ -11,6 +11,8 @@ services:
       AUTO_STOP_AFTER_S: ${AUTO_STOP_AFTER_S:-600}
       WHISPER_MODEL: ${WHISPER_MODEL:-small}
       WHISPER_DEVICE: ${WHISPER_DEVICE:-cpu}
+      AUDIO_SAMPLE_RATE: ${AUDIO_SAMPLE_RATE:-48000}
+      AUDIO_DEVICE_MATCH: ${AUDIO_DEVICE_MATCH:-usb}
     volumes:
       - /tmp/.X11-unix:/tmp/.X11-unix:rw
       - ${HOME}/.Xauthority:/root/.Xauthority:ro
