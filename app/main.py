@@ -61,7 +61,7 @@ def handle_command(browser: BrowserController, cfg: dict, command: str) -> None:
         browser.fullscreen()
     elif "назад" in command:
         browser.go_back()
-    elif any(w in command for w in ("домой", "главная", "мультики", "на главную")):
+    elif any(w in command for w in ("домой", "главная", "мультики", "на главную", "открой браузер")):
         browser.go_home()
     elif any(w in command for w in ("найди", "включи", "поищи", "хочу")):
         if cfg["strict_whitelist"]:
