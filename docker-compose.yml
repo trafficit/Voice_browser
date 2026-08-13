@@ -1,0 +1,29 @@
+services:
+  voice-browser:
+    build: .
+    container_name: voice-browser-kids
+    restart: unless-stopped
+    environment:
+      DISPLAY: ${DISPLAY}
+      PULSE_SERVER: unix:/tmp/pulse-socket
+      START_WORD: ${START_WORD:-запустись}
+      STOP_WORD: ${STOP_WORD:-остановись}
+      AUTO_STOP_AFTER_S: ${AUTO_STOP_AFTER_S:-600}
+      WHISPER_MODEL: ${WHISPER_MODEL:-small}
+      WHISPER_DEVICE: ${WHISPER_DEVICE:-cpu}
+    volumes:
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+      - ${HOME}/.Xauthority:/root/.Xauthority:ro
+      - ${XDG_RUNTIME_DIR}/pulse/native:/tmp/pulse-socket
+      - ./app:/app
+      - chrome-profile:/data/chrome-profile
+      - whisper-cache:/root/.cache/huggingface
+    devices:
+      - /dev/snd
+    group_add:
+      - audio
+    shm_size: "1gb"
+
+volumes:
+  chrome-profile:
+  whisper-cache:
