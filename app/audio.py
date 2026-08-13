@@ -1,9 +1,12 @@
 """Запись фразы с микрофона по VAD (детектору голоса) и распознавание Faster-Whisper."""
 import collections
+import io
 import logging
 import os
 import queue
+import subprocess
 import time
+import wave
 
 import numpy as np
 import sounddevice as sd
@@ -53,6 +56,29 @@ def _resample(audio: np.ndarray, orig_sr: int, target_sr: int) -> np.ndarray:
     orig_idx = np.arange(audio.size)
     target_idx = np.linspace(0, audio.size - 1, num=target_len)
     return np.interp(target_idx, orig_idx, audio).astype(np.float32)
+
+
+def speak(text: str):
+    """Голосовая обратная связь через офлайн-синтез espeak-ng.
+
+    espeak-ng генерирует WAV в память (--stdout), а воспроизводим его тем же
+    путём (sounddevice), что и гудки play_beep - так надёжнее, чем полагаться
+    на собственный аудио-бэкенд espeak-ng внутри контейнера.
+    """
+    try:
+        proc = subprocess.run(
+            ["espeak-ng", "-v", "ru", "-s", "165", "--stdout", text],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            timeout=10,
+        )
+        with wave.open(io.BytesIO(proc.stdout), "rb") as wf:
+            sr = wf.getframerate()
+            raw = wf.readframes(wf.getnframes())
+        samples = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
+        sd.play(samples, sr)
+    except Exception as exc:
+        log.debug("speak failed: %s", exc)
 
 
 def play_beep(freq=880, duration=0.12, volume=0.2):

@@ -13,7 +13,7 @@ import time
 
 import yaml
 
-from audio import Recorder, Transcriber, play_beep
+from audio import Recorder, Transcriber, play_beep, speak
 from browser import BrowserController
 
 logging.basicConfig(
@@ -59,6 +59,25 @@ def load_config():
     return cfg
 
 
+CONTROL_ACTIONS = (
+    (("пауза", "стоп видео", "останови"), "toggle_play_pause"),
+    (("играй", "продолжи", "запусти видео"), "toggle_play_pause"),
+    (("погромче", "громче"), "volume_up"),
+    (("потише", "тише"), "volume_down"),
+    (("весь экран", "полный экран", "во весь экран"), "fullscreen"),
+    (("назад",), "go_back"),
+    (("домой", "главная", "мультики", "на главную", "открой браузер"), "go_home"),
+)
+
+# Слова-паразиты, которые ребёнок обычно добавляет к названию, но которые не
+# нужны в поисковом запросе (убираются перед поиском на YouTube Kids).
+SEARCH_FILLER_WORDS = (
+    "найди", "включи", "поищи", "хочу",
+    "мультфильм про", "мультфильм", "видео про", "видео",
+    "фильм про", "фильм", "мультик про", "мультик",
+)
+
+
 def handle_command(browser: BrowserController, cfg: dict, command: str) -> None:
     if not command:
         return
@@ -69,37 +88,38 @@ def handle_command(browser: BrowserController, cfg: dict, command: str) -> None:
         if phrase in command:
             log.info("Открываю избранное: %s", phrase)
             browser.open_url(url)
+            speak("Хорошо")
             return
 
-    if any(w in command for w in ("пауза", "стоп видео", "останови")):
-        browser.toggle_play_pause()
-    elif any(w in command for w in ("играй", "продолжи", "запусти видео")):
-        browser.toggle_play_pause()
-    elif any(w in command for w in ("погромче", "громче")):
-        browser.volume_up()
-    elif any(w in command for w in ("потише", "тише")):
-        browser.volume_down()
-    elif any(w in command for w in ("весь экран", "полный экран", "во весь экран")):
-        browser.fullscreen()
-    elif "назад" in command:
-        browser.go_back()
-    elif any(w in command for w in ("домой", "главная", "мультики", "на главную", "открой браузер")):
-        browser.go_home()
-    elif any(w in command for w in ("найди", "включи", "поищи", "хочу")):
-        if cfg["strict_whitelist"]:
-            log.info("Свободный поиск отключен (strict_whitelist=true), а фраза не найдена в избранном.")
+    for phrases, action_name in CONTROL_ACTIONS:
+        if any(w in command for w in phrases):
+            getattr(browser, action_name)()
+            speak("Хорошо")
             return
-        query = command
-        for w in ("найди", "включи", "поищи", "хочу", "видео", "мультик про", "мультик"):
-            query = query.replace(w, "")
-        query = query.strip()
-        if query:
-            log.info("Ищу на YouTube Kids: %s", query)
-            browser.search_kids(query)
-            time.sleep(2)
-            browser.click_first_result()
-    else:
+
+    # Всё, что не подошло под известную команду или избранное, по умолчанию
+    # уходит в поиск на YouTube Kids - ребёнок обычно просто называет, что
+    # хочет посмотреть, без специальных слов вроде "найди"/"включи".
+    if cfg["strict_whitelist"]:
+        log.info("Свободный поиск отключен (strict_whitelist=true), а фраза не найдена в избранном.")
+        speak("Такого мультика нет в списке")
+        return
+
+    query = command
+    for w in SEARCH_FILLER_WORDS:
+        query = query.replace(w, "")
+    query = query.strip()
+
+    if not query:
         log.info("Команда не распознана как известная.")
+        speak("Не поняла, повтори")
+        return
+
+    log.info("Ищу на YouTube Kids: %s", query)
+    speak("Ищу")
+    browser.search_kids(query)
+    time.sleep(2)
+    browser.click_first_result()
 
 
 def main():
@@ -151,6 +171,7 @@ def main():
                         continue
                     active = True
                     play_beep(freq=1200)
+                    speak("Слушаю")
                     log.info("Ассистент активирован")
                     remainder = text.replace(matched, "", 1).strip()
                     if remainder:
@@ -161,6 +182,7 @@ def main():
                 if any(w in text for w in cfg["stop_words"]):
                     active = False
                     play_beep(freq=440)
+                    speak("Хорошо, отдыхаю")
                     log.info("Ассистент остановлен")
                     continue
 
