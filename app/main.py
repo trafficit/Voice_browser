@@ -25,11 +25,33 @@ log = logging.getLogger("main")
 CONFIG_PATH = os.path.join(os.path.dirname(__file__), "config.yaml")
 
 
+DEFAULT_START_WORDS = ["запустись", "запусти", "запускай", "включись"]
+# Без "стоп"/"останови" в отдельности - эти слова уже используются в командах
+# паузы ("стоп видео", "останови"), совпадение перебило бы паузу на полное
+# выключение ассистента.
+DEFAULT_STOP_WORDS = ["остановись", "выключись", "хватит"]
+
+
+def _parse_words(raw, default: list) -> list:
+    if raw is None:
+        return default
+    if isinstance(raw, list):
+        words = raw
+    else:
+        words = str(raw).split(",")
+    return [w.strip().lower() for w in words if w.strip()]
+
+
 def load_config():
     with open(CONFIG_PATH, "r", encoding="utf-8") as f:
         cfg = yaml.safe_load(f) or {}
-    cfg["start_word"] = os.environ.get("START_WORD", cfg.get("start_word", "запустись")).strip().lower()
-    cfg["stop_word"] = os.environ.get("STOP_WORD", cfg.get("stop_word", "остановись")).strip().lower()
+    # START_WORD/STOP_WORD (env или config.yaml) можно задать несколькими
+    # словами через запятую - сработает любое из них, например:
+    # START_WORD=запустись,запусти,запускай
+    start_raw = os.environ.get("START_WORD", cfg.get("start_word"))
+    stop_raw = os.environ.get("STOP_WORD", cfg.get("stop_word"))
+    cfg["start_words"] = _parse_words(start_raw, DEFAULT_START_WORDS)
+    cfg["stop_words"] = _parse_words(stop_raw, DEFAULT_STOP_WORDS)
     cfg["auto_stop_after_s"] = int(os.environ.get("AUTO_STOP_AFTER_S", cfg.get("auto_stop_after_s", 600)))
     cfg.setdefault("favorites", {})
     cfg.setdefault("strict_whitelist", False)
@@ -83,8 +105,8 @@ def handle_command(browser: BrowserController, cfg: dict, command: str) -> None:
 def main():
     cfg = load_config()
     log.info(
-        "start_word='%s' | stop_word='%s' | auto_stop_after_s=%s | strict_whitelist=%s",
-        cfg["start_word"], cfg["stop_word"], cfg["auto_stop_after_s"], cfg["strict_whitelist"],
+        "start_words=%s | stop_words=%s | auto_stop_after_s=%s | strict_whitelist=%s",
+        cfg["start_words"], cfg["stop_words"], cfg["auto_stop_after_s"], cfg["strict_whitelist"],
     )
 
     browser = BrowserController(home_url=cfg["home_url"])
@@ -104,7 +126,7 @@ def main():
     signal.signal(signal.SIGTERM, shutdown)
     signal.signal(signal.SIGINT, shutdown)
 
-    log.info("Готово. Слушаю микрофон... (скажите '%s', чтобы начать)", cfg["start_word"])
+    log.info("Готово. Слушаю микрофон... (скажите %s, чтобы начать)", " / ".join(cfg["start_words"]))
     with Recorder() as recorder:
         while running:
             try:
@@ -113,7 +135,7 @@ def main():
 
                 if audio is None:
                     # тишина дольше auto_stop_after_s в активном режиме
-                    log.info("Тишина слишком долго - авто-остановка, жду '%s'", cfg["start_word"])
+                    log.info("Тишина слишком долго - авто-остановка, жду стоп-слово")
                     active = False
                     play_beep(freq=440)
                     continue
@@ -124,18 +146,19 @@ def main():
                 log.debug("Распознано (сырое): %s", text)
 
                 if not active:
-                    if cfg["start_word"] not in text:
+                    matched = next((w for w in cfg["start_words"] if w in text), None)
+                    if matched is None:
                         continue
                     active = True
                     play_beep(freq=1200)
                     log.info("Ассистент активирован")
-                    remainder = text.replace(cfg["start_word"], "", 1).strip()
+                    remainder = text.replace(matched, "", 1).strip()
                     if remainder:
                         browser.restart_if_dead()
                         handle_command(browser, cfg, remainder)
                     continue
 
-                if cfg["stop_word"] in text:
+                if any(w in text for w in cfg["stop_words"]):
                     active = False
                     play_beep(freq=440)
                     log.info("Ассистент остановлен")
