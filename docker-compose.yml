@@ -13,6 +13,8 @@ services:
       WHISPER_DEVICE: ${WHISPER_DEVICE:-cpu}
       AUDIO_SAMPLE_RATE: ${AUDIO_SAMPLE_RATE:-48000}
       AUDIO_DEVICE_MATCH: ${AUDIO_DEVICE_MATCH:-usb}
+      AUDIO_OUTPUT_SAMPLE_RATE: ${AUDIO_OUTPUT_SAMPLE_RATE:-48000}
+      AUDIO_OUTPUT_MATCH: ${AUDIO_OUTPUT_MATCH:-}
     volumes:
       - /tmp/.X11-unix:/tmp/.X11-unix:rw
       - ${HOME}/.Xauthority:/root/.Xauthority:ro

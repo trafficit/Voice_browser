@@ -28,25 +28,61 @@ FRAME_SAMPLES = REC_SAMPLE_RATE * FRAME_MS // 1000
 # (по умолчанию ищем USB-микрофон, а не встроенный в материнку).
 AUDIO_DEVICE_MATCH = os.environ.get("AUDIO_DEVICE_MATCH", "usb")
 
+# Частота воспроизведения гудков/озвучки - как и с записью, лучше зафиксировать
+# на безопасном значении и ресемплировать самим, чем упереться в
+# "Invalid sample rate" на конкретной звуковой карте.
+OUTPUT_SAMPLE_RATE = int(os.environ.get("AUDIO_OUTPUT_SAMPLE_RATE", "48000"))
+# Пусто = устройство вывода по умолчанию. Если звук идёт не туда (например
+# в HDMI вместо колонок) - впишите часть названия нужного устройства,
+# например "PCH" (см. список устройств в логах при старте).
+AUDIO_OUTPUT_MATCH = os.environ.get("AUDIO_OUTPUT_MATCH", "")
 
-def _find_input_device(name_substring: str):
-    if not name_substring:
-        return None
+
+_device_cache = {}
+
+
+def _resolve_device(name_substring: str, kind: str):
+    """kind: 'input' или 'output'. Результат кэшируется - список устройств
+    запрашивается только один раз за это сочетание маски/типа."""
+    cache_key = (name_substring, kind)
+    if cache_key in _device_cache:
+        return _device_cache[cache_key]
+
+    channels_key = f"max_{kind}_channels"
+    idx = None
+    if name_substring:
+        try:
+            devices = sd.query_devices()
+            for i, dev in enumerate(devices):
+                if dev.get(channels_key, 0) > 0 and name_substring.lower() in dev["name"].lower():
+                    idx = i
+                    break
+        except Exception as exc:
+            log.warning("Не удалось получить список аудиоустройств: %s", exc)
+
+    _device_cache[cache_key] = idx
+    return idx
+
+
+def log_audio_devices():
+    """Печатает список всех аудиоустройств и что выбрано - для диагностики."""
     try:
         devices = sd.query_devices()
     except Exception as exc:
         log.warning("Не удалось получить список аудиоустройств: %s", exc)
-        return None
+        return
 
     for idx, dev in enumerate(devices):
-        if dev.get("max_input_channels", 0) > 0 and name_substring.lower() in dev["name"].lower():
-            log.info("Микрофон выбран: [%d] %s", idx, dev["name"])
-            return idx
+        if dev.get("max_input_channels", 0) > 0 or dev.get("max_output_channels", 0) > 0:
+            log.info(
+                "Аудиоустройство [%d]: %s (вход=%d, выход=%d)",
+                idx, dev["name"], dev.get("max_input_channels", 0), dev.get("max_output_channels", 0),
+            )
 
-    log.warning("Микрофон по маске '%s' не найден, использую устройство по умолчанию", name_substring)
-    for idx, dev in enumerate(devices):
-        log.info("Доступное аудиоустройство [%d]: %s (входов=%d)", idx, dev["name"], dev.get("max_input_channels", 0))
-    return None
+    in_idx = _resolve_device(AUDIO_DEVICE_MATCH, "input")
+    out_idx = _resolve_device(AUDIO_OUTPUT_MATCH, "output")
+    log.info("Микрофон: %s", devices[in_idx]["name"] if in_idx is not None else "устройство по умолчанию")
+    log.info("Вывод звука: %s", devices[out_idx]["name"] if out_idx is not None else "устройство по умолчанию")
 
 
 def _resample(audio: np.ndarray, orig_sr: int, target_sr: int) -> np.ndarray:
@@ -56,6 +92,13 @@ def _resample(audio: np.ndarray, orig_sr: int, target_sr: int) -> np.ndarray:
     orig_idx = np.arange(audio.size)
     target_idx = np.linspace(0, audio.size - 1, num=target_len)
     return np.interp(target_idx, orig_idx, audio).astype(np.float32)
+
+
+def _play(samples: np.ndarray, sr: int):
+    samples = _resample(samples, sr, OUTPUT_SAMPLE_RATE)
+    device = _resolve_device(AUDIO_OUTPUT_MATCH, "output")
+    sd.play(samples, OUTPUT_SAMPLE_RATE, device=device)
+    sd.wait()
 
 
 def speak(text: str):
@@ -76,19 +119,19 @@ def speak(text: str):
             sr = wf.getframerate()
             raw = wf.readframes(wf.getnframes())
         samples = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
-        sd.play(samples, sr)
-    except Exception as exc:
-        log.debug("speak failed: %s", exc)
+        _play(samples, sr)
+    except Exception:
+        log.warning("Не удалось озвучить '%s'", text, exc_info=True)
 
 
 def play_beep(freq=880, duration=0.12, volume=0.2):
     """Короткий звуковой сигнал обратной связи, что ассистент услышал wake word."""
     try:
-        t = np.linspace(0, duration, int(REC_SAMPLE_RATE * duration), False)
-        tone = np.sin(freq * 2 * np.pi * t) * volume
-        sd.play(tone.astype(np.float32), REC_SAMPLE_RATE)
-    except Exception as exc:
-        log.debug("beep failed: %s", exc)
+        t = np.linspace(0, duration, int(OUTPUT_SAMPLE_RATE * duration), False)
+        tone = (np.sin(freq * 2 * np.pi * t) * volume).astype(np.float32)
+        _play(tone, OUTPUT_SAMPLE_RATE)
+    except Exception:
+        log.warning("Не удалось воспроизвести гудок", exc_info=True)
 
 
 class Recorder:
@@ -101,7 +144,8 @@ class Recorder:
         self.min_speech_frames = min_speech_ms // FRAME_MS
         self._q = queue.Queue()
 
-        device = _find_input_device(AUDIO_DEVICE_MATCH)
+        log_audio_devices()
+        device = _resolve_device(AUDIO_DEVICE_MATCH, "input")
         self._stream = sd.RawInputStream(
             samplerate=REC_SAMPLE_RATE,
             blocksize=FRAME_SAMPLES,
