@@ -1,5 +1,6 @@
 """Обёртка над Selenium/Chromium для управления браузером."""
 import logging
+import os
 import urllib.parse
 
 from selenium import webdriver
@@ -19,6 +20,7 @@ class BrowserController:
         self.driver = self._start_driver(profile_dir)
 
     def _start_driver(self, profile_dir: str):
+        self._clear_stale_lock(profile_dir)
         options = webdriver.ChromeOptions()
         options.binary_location = CHROMIUM_BIN
         options.add_argument(f"--user-data-dir={profile_dir}")
@@ -34,6 +36,22 @@ class BrowserController:
         driver = webdriver.Chrome(service=service, options=options)
         driver.get(self.home_url)
         return driver
+
+    @staticmethod
+    def _clear_stale_lock(profile_dir: str):
+        """Chrome оставляет Singleton*-файлы в profile_dir при нечистом завершении.
+
+        Контейнер каждый раз стартует с чистого процесса - предыдущий Chromium
+        точно мёртв, так что эти файлы всегда протухшие. Без очистки Chrome
+        считает профиль "уже используется" и падает на каждом старте - контейнер
+        уходит в бесконечный restart-loop (restart: unless-stopped перезапускает
+        снова и снова, каждый раз с тем же результатом).
+        """
+        for name in ("SingletonLock", "SingletonSocket", "SingletonCookie"):
+            try:
+                os.remove(os.path.join(profile_dir, name))
+            except FileNotFoundError:
+                pass
 
     def restart_if_dead(self, profile_dir: str = "/data/chrome-profile"):
         try:
